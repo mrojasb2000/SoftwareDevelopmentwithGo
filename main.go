@@ -1,19 +1,28 @@
 package main
 
 import (
-	"log"
+	"fmt"
 	"syscall"
 )
 
-func main() {
-	log.Println("Getpid : ", syscall.Getpid())   // Obtains the process id of the current running app
-	log.Println("Getpgrp : ", syscall.Getpgrp()) // Obtains the group process id of the current running app
-	log.Println("Getppid : ", syscall.Getppid()) // Obtains the parent process id of the current running app
-	log.Println("Gettid : ", syscall.Getppid())  // Obtains the caller's thread it
+const (
+	gigabyte = (1024.0 * 1024.0 * 1024.0)
+)
 
-	wd, err := syscall.Getwd()
+func main() {
+	var statfs = syscall.Statfs_t{}
+	var total uint64
+	var used uint64
+	var free uint64
+	err := syscall.Statfs("/", &statfs)
 	if err != nil {
-		log.Fatalln(err)
+		fmt.Printf("[ERROR]: %s\n", err)
+	} else {
+		total = statfs.Blocks * uint64(statfs.Bsize)
+		free = statfs.Bfree * uint64(statfs.Bsize)
+		used = total - free
 	}
-	log.Println(string(wd))
+	fmt.Printf("total Disk Space : %.1f GB\n", float64(total)/gigabyte)
+	fmt.Printf("total Disk Used : %.1f GB\n", float64(used)/gigabyte)
+	fmt.Printf("total Disk Free : %.1f GB\n", float64(free)/gigabyte)
 }
