@@ -1,67 +1,108 @@
 package main
 
-import (
-	"log"
-	"net"
-	"syscall"
-)
+import "os"
+import "flag"
+import "fmt"
+import "strings"
+import "debug/elf"
+import "syscall"
 
-const (
-	host    = "127.0.0.1"
-	port    = 8888
-	message = "HTTP/1.1 200 OK\r\n" +
-		"Content-Type: text/html; charset=utf-8\r\n" +
-		"Content-Length: 25\r\n" +
-		"\r\n" +
-		"Server with syscall"
-)
+//import "debug/dwarf"
 
-func startServer(host string, port int) (int, error) {
-	fd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_STREAM, 0)
-	if err != nil {
-		log.Fatal("error (listen) : ", err)
+func dump_dynstr(file *elf.File) {
+	fmt.Printf("DynStrings:\n")
+	dynstrs, _ := file.DynString(elf.DT_NEEDED)
+	for _, e := range dynstrs {
+		fmt.Printf("\t%s\n", e)
 	}
-	srv := &syscall.SockaddrInet4{Port: port}
-	addrs, err := net.LookupHost(host)
-	if err != nil {
-		log.Fatal("error (lookup) : ", err)
+	dynstrs, _ = file.DynString(elf.DT_SONAME)
+	for _, e := range dynstrs {
+		fmt.Printf("\t%s\n", e)
 	}
-	for _, addr := range addrs {
-		ip := net.ParseIP(addr).To4()
-		copy(srv.Addr[:], ip)
-		if err = syscall.Bind(fd, srv); err != nil {
-			log.Fatal("error (bind) : ", err)
+	dynstrs, _ = file.DynString(elf.DT_RPATH)
+	for _, e := range dynstrs {
+		fmt.Printf("\t%s\n", e)
+	}
+	dynstrs, _ = file.DynString(elf.DT_RUNPATH)
+	for _, e := range dynstrs {
+		fmt.Printf("\t%s\n", e)
+	}
+}
+
+func dump_symbols(file *elf.File) {
+	fmt.Printf("Symbols:\n")
+	symbols, _ := file.Symbols()
+	for _, e := range symbols {
+		if !strings.EqualFold(e.Name, "") {
+			fmt.Printf("\t%s\n", e.Name)
 		}
 	}
-	if err = syscall.Listen(fd, syscall.SOMAXCONN); err != nil {
-		log.Fatal("error (listening) : ", err)
-	} else {
-		log.Println("Listening on ", host, ":", port)
-	}
+}
+
+func dump_elf(filename string) int {
+	file, err := elf.Open(filename)
 	if err != nil {
-		log.Fatal("error (port listening) : ", err)
+		fmt.Printf("Couldn’t open file : \"%s\" as an ELF.\n")
+		return 2
 	}
-	return fd, nil
+	dump_dynstr(file)
+	dump_symbols(file)
+	return 0
+}
+
+func init_debug(filename string) int {
+	attr := &os.ProcAttr{Sys: &syscall.SysProcAttr{Ptrace: true}}
+	if proc, err := os.StartProcess(filename, []string{"/"}, attr); err == nil {
+		proc.Wait()
+		foo := syscall.PtraceAttach(proc.Pid)
+		fmt.Printf("Started New Process: %v.\n", proc.Pid)
+		fmt.Printf("PtraceAttach res: %v.\n", foo)
+		return 0
+	}
+	return 2
 }
 
 func main() {
-	fd, err := startServer(host, port)
-	if err != nil {
-		log.Fatal("error (start server) : ", err)
-	}
-
-	for {
-		cSock, cAddr, err := syscall.Accept(fd)
-		if err != nil {
-			log.Fatal("error (accept) : ", err)
+	if len(os.Args) > 1 {
+		filename := flag.String("filename", "", "A binary ELF file.")
+		action := flag.String("action", "", "Action to make: {dump|debug}.")
+		flag.Parse()
+		if *filename == "" || *action == "" {
+			goto Usage
 		}
-		go func(clientSocket int, clientAddress syscall.Sockaddr) {
-			err := syscall.Sendmsg(clientSocket, []byte(message), []byte{}, clientAddress, 0)
-
-			if err != nil {
-				log.Fatal("error (send) : ", err)
-			}
-			syscall.Close(clientSocket)
-		}(cSock, cAddr)
+		file, err := os.Stat(*filename)
+		if os.IsNotExist(err) {
+			fmt.Printf("No such file or directory: %s.\n", *filename)
+			goto Error
+		} else if mode := file.Mode(); mode.IsDir() {
+			fmt.Printf("Parameter must be a file, not a " +
+				"directory.\n")
+			goto Error
+		}
+		f, err := os.Open(*filename)
+		if err != nil {
+			fmt.Printf("Couldn’t open file: \"%s\".\n", *filename)
+			goto Error
+		}
+		f.Close()
+		fmt.Printf("Tracing program : \"%s\".\n", *filename)
+		fmt.Printf("Action : \"%s\".\n", *action)
+		switch *action {
+		case "debug":
+			os.Exit(init_debug(*filename))
+		case "dump":
+			os.Exit(dump_elf(*filename))
+		}
+	} else {
+		goto Usage
 	}
+
+Usage:
+	fmt.Printf("Usage of ./main:\n" +
+		"  -action=\"{dump|debug}\": Action to make.\n" +
+		"  -filename=\"file\": A binary ELF file.\n")
+	goto Error
+
+Error:
+	os.Exit(2)
 }
